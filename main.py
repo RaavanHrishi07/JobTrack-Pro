@@ -1,8 +1,9 @@
-
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import sqlite3
-from datetime import datetime, date, timedelta
+import csv
+from datetime import datetime, date
+from collections import Counter
 
 DB_NAME = "jobtrack.db"
 
@@ -17,8 +18,8 @@ class JobTrackPro:
     def __init__(self, root):
         self.root = root
         self.root.title("JobTrack Pro | Application Manager")
-        self.root.geometry("1200x760")
-        self.root.minsize(1000, 650)
+        self.root.geometry("1250x790")
+        self.root.minsize(1050, 680)
         self.root.configure(bg=BG)
 
         self.selected_id = None
@@ -33,9 +34,9 @@ class JobTrackPro:
     # ---------------- DATABASE ----------------
 
     def create_database(self):
+        """Create or safely upgrade the existing database."""
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
-
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS applications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,7 +51,6 @@ class JobTrackPro:
                 )
             """)
 
-            # Upgrade an existing database without deleting old records.
             cursor.execute("PRAGMA table_info(applications)")
             columns = [column[1] for column in cursor.fetchall()]
 
@@ -61,59 +61,52 @@ class JobTrackPro:
 
             conn.commit()
 
-    # ---------------- UI ----------------
+    # ---------------- MAIN UI ----------------
 
     def build_ui(self):
         header = tk.Frame(self.root, bg=BG)
-        header.pack(fill="x", padx=25, pady=(20, 10))
+        header.pack(fill="x", padx=25, pady=(18, 8))
 
         tk.Label(
-            header,
-            text="JobTrack Pro",
-            font=("Segoe UI", 25, "bold"),
-            bg=BG,
-            fg=TEXT
+            header, text="JobTrack Pro",
+            font=("Segoe UI", 25, "bold"), bg=BG, fg=TEXT
         ).pack(side="left")
 
         tk.Label(
-            header,
-            text="Your personal job application dashboard",
-            font=("Segoe UI", 10),
-            bg=BG,
-            fg=MUTED
+            header, text="Your personal job application dashboard",
+            font=("Segoe UI", 10), bg=BG, fg=MUTED
         ).pack(side="left", padx=18, pady=(10, 0))
 
         self.cards_frame = tk.Frame(self.root, bg=BG)
-        self.cards_frame.pack(fill="x", padx=25, pady=10)
+        self.cards_frame.pack(fill="x", padx=25, pady=8)
 
         self.total_label = self.create_summary_card(
-            self.cards_frame, "TOTAL APPLICATIONS", "0"
+            self.cards_frame, "TOTAL APPLICATIONS"
         )
         self.applied_label = self.create_summary_card(
-            self.cards_frame, "APPLIED", "0"
+            self.cards_frame, "APPLIED"
         )
         self.interview_label = self.create_summary_card(
-            self.cards_frame, "INTERVIEWS", "0"
+            self.cards_frame, "INTERVIEWS"
         )
         self.selected_label = self.create_summary_card(
-            self.cards_frame, "SELECTED", "0"
+            self.cards_frame, "SELECTED"
+        )
+        self.success_label = self.create_summary_card(
+            self.cards_frame, "SUCCESS RATE"
         )
 
         self.upcoming_frame = tk.Frame(
-            self.root, bg="#EEF2FF", highlightbackground="#C7D2FE",
-            highlightthickness=1
+            self.root, bg="#EEF2FF",
+            highlightbackground="#C7D2FE", highlightthickness=1
         )
-        self.upcoming_frame.pack(fill="x", padx=25, pady=(5, 12))
+        self.upcoming_frame.pack(fill="x", padx=25, pady=(4, 10))
 
         self.upcoming_label = tk.Label(
             self.upcoming_frame,
-            text="Upcoming interviews: None",
-            font=("Segoe UI", 10, "bold"),
-            bg="#EEF2FF",
-            fg="#3730A3",
-            anchor="w",
-            padx=15,
-            pady=10
+            text="Upcoming interviews: None scheduled",
+            font=("Segoe UI", 10, "bold"), bg="#EEF2FF",
+            fg="#3730A3", anchor="w", padx=15, pady=9
         )
         self.upcoming_label.pack(fill="x")
 
@@ -123,39 +116,65 @@ class JobTrackPro:
         self.create_form(main)
         self.create_table_section(main)
 
-    def create_summary_card(self, parent, title, value):
-        card = tk.Frame(
-            parent, bg=CARD, padx=18, pady=14,
-            highlightbackground="#E5E7EB", highlightthickness=1
-        )
-        card.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        footer = tk.Frame(self.root, bg=BG)
+        footer.pack(fill="x", padx=25, pady=(3, 12))
+
+        tk.Button(
+            footer, text="View Analytics",
+            command=self.open_analytics,
+            bg="#0F766E", fg="white", activebackground="#115E59",
+            activeforeground="white", font=("Segoe UI", 10, "bold"),
+            relief="flat", cursor="hand2", padx=15, pady=8
+        ).pack(side="left")
+
+        tk.Button(
+            footer, text="Export CSV",
+            command=self.export_csv,
+            bg=PRIMARY, fg="white", activebackground="#4338CA",
+            activeforeground="white", font=("Segoe UI", 10, "bold"),
+            relief="flat", cursor="hand2", padx=15, pady=8
+        ).pack(side="left", padx=9)
 
         tk.Label(
-            card, text=title, font=("Segoe UI", 9, "bold"),
+            footer,
+            text="JobTrack Pro • Keep your career journey organised",
+            bg=BG, fg=MUTED, font=("Segoe UI", 9)
+        ).pack(side="right")
+
+    def create_summary_card(self, parent, title):
+        card = tk.Frame(
+            parent, bg=CARD, padx=13, pady=11,
+            highlightbackground="#E5E7EB", highlightthickness=1
+        )
+        card.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        tk.Label(
+            card, text=title, font=("Segoe UI", 8, "bold"),
             bg=CARD, fg=MUTED
         ).pack(anchor="w")
 
-        label = tk.Label(
-            card, text=value, font=("Segoe UI", 23, "bold"),
+        value_label = tk.Label(
+            card, text="0", font=("Segoe UI", 21, "bold"),
             bg=CARD, fg=PRIMARY
         )
-        label.pack(anchor="w", pady=(5, 0))
-        return label
+        value_label.pack(anchor="w", pady=(4, 0))
+        return value_label
+
+    # ---------------- APPLICATION FORM ----------------
 
     def create_form(self, parent):
         form = tk.Frame(
-            parent, bg=CARD, padx=18, pady=18,
+            parent, bg=CARD, padx=16, pady=15,
             highlightbackground="#E5E7EB", highlightthickness=1
         )
-        form.pack(side="left", fill="y", padx=(0, 15))
+        form.pack(side="left", fill="y", padx=(0, 14))
 
         tk.Label(
             form, text="Application Details",
-            font=("Segoe UI", 15, "bold"), bg=CARD, fg=TEXT
-        ).pack(anchor="w", pady=(0, 15))
+            font=("Segoe UI", 14, "bold"), bg=CARD, fg=TEXT
+        ).pack(anchor="w", pady=(0, 10))
 
         self.entries = {}
-
         fields = [
             ("Company Name", "company"),
             ("Job Role", "role"),
@@ -167,139 +186,136 @@ class JobTrackPro:
 
         for label_text, key in fields:
             tk.Label(
-                form, text=label_text, font=("Segoe UI", 9, "bold"),
+                form, text=label_text, font=("Segoe UI", 8, "bold"),
                 bg=CARD, fg=MUTED
-            ).pack(anchor="w", pady=(5, 3))
+            ).pack(anchor="w", pady=(4, 2))
 
-            entry = ttk.Entry(form, width=32, font=("Segoe UI", 10))
-            entry.pack(fill="x", pady=(0, 5))
+            entry = ttk.Entry(form, width=31, font=("Segoe UI", 9))
+            entry.pack(fill="x", pady=(0, 3))
             self.entries[key] = entry
 
         self.entries["date_applied"].insert(0, date.today().isoformat())
 
         tk.Label(
             form, text="Application Status",
-            font=("Segoe UI", 9, "bold"), bg=CARD, fg=MUTED
-        ).pack(anchor="w", pady=(5, 3))
+            font=("Segoe UI", 8, "bold"), bg=CARD, fg=MUTED
+        ).pack(anchor="w", pady=(4, 2))
 
         self.status_box = ttk.Combobox(
             form,
             values=["Applied", "Interview", "Selected", "Rejected"],
-            state="readonly",
-            width=29
+            state="readonly", width=28
         )
         self.status_box.set("Applied")
-        self.status_box.pack(fill="x", pady=(0, 8))
+        self.status_box.pack(fill="x", pady=(0, 5))
 
         tk.Label(
-            form, text="Notes",
-            font=("Segoe UI", 9, "bold"), bg=CARD, fg=MUTED
-        ).pack(anchor="w", pady=(5, 3))
+            form, text="Notes", font=("Segoe UI", 8, "bold"),
+            bg=CARD, fg=MUTED
+        ).pack(anchor="w", pady=(4, 2))
 
         self.notes_text = tk.Text(
-            form, width=32, height=4, font=("Segoe UI", 10),
+            form, width=31, height=3, font=("Segoe UI", 9),
             relief="solid", bd=1, wrap="word"
         )
-        self.notes_text.pack(fill="x", pady=(0, 12))
+        self.notes_text.pack(fill="x", pady=(0, 8))
 
         self.add_button = tk.Button(
             form, text="＋ Add Application",
             command=self.add_application,
             bg=PRIMARY, fg="white", activebackground="#4338CA",
-            activeforeground="white", font=("Segoe UI", 10, "bold"),
-            relief="flat", cursor="hand2", pady=9
+            activeforeground="white", font=("Segoe UI", 9, "bold"),
+            relief="flat", cursor="hand2", pady=7
         )
-        self.add_button.pack(fill="x", pady=3)
+        self.add_button.pack(fill="x", pady=2)
 
         tk.Button(
             form, text="Update Selected",
             command=self.update_application,
             bg="#0F766E", fg="white", activebackground="#115E59",
-            activeforeground="white", font=("Segoe UI", 10, "bold"),
-            relief="flat", cursor="hand2", pady=9
-        ).pack(fill="x", pady=3)
+            activeforeground="white", font=("Segoe UI", 9, "bold"),
+            relief="flat", cursor="hand2", pady=7
+        ).pack(fill="x", pady=2)
 
         tk.Button(
             form, text="Delete Selected",
             command=self.delete_application,
             bg="#DC2626", fg="white", activebackground="#B91C1C",
-            activeforeground="white", font=("Segoe UI", 10, "bold"),
-            relief="flat", cursor="hand2", pady=9
-        ).pack(fill="x", pady=3)
+            activeforeground="white", font=("Segoe UI", 9, "bold"),
+            relief="flat", cursor="hand2", pady=7
+        ).pack(fill="x", pady=2)
 
         tk.Button(
             form, text="Clear Form",
             command=self.clear_form,
             bg="#E5E7EB", fg=TEXT, activebackground="#D1D5DB",
-            font=("Segoe UI", 10, "bold"), relief="flat",
-            cursor="hand2", pady=9
-        ).pack(fill="x", pady=3)
+            font=("Segoe UI", 9, "bold"), relief="flat",
+            cursor="hand2", pady=7
+        ).pack(fill="x", pady=2)
+
+    # ---------------- APPLICATION TABLE ----------------
 
     def create_table_section(self, parent):
         section = tk.Frame(
-            parent, bg=CARD, padx=15, pady=15,
+            parent, bg=CARD, padx=13, pady=13,
             highlightbackground="#E5E7EB", highlightthickness=1
         )
         section.pack(side="left", fill="both", expand=True)
 
         tk.Label(
             section, text="Your Applications",
-            font=("Segoe UI", 15, "bold"), bg=CARD, fg=TEXT
-        ).pack(anchor="w", pady=(0, 12))
+            font=("Segoe UI", 14, "bold"), bg=CARD, fg=TEXT
+        ).pack(anchor="w", pady=(0, 10))
 
         controls = tk.Frame(section, bg=CARD)
-        controls.pack(fill="x", pady=(0, 10))
+        controls.pack(fill="x", pady=(0, 8))
 
         self.search_entry = ttk.Entry(
-            controls, textvariable=self.search_var,
-            font=("Segoe UI", 10)
+            controls, textvariable=self.search_var, font=("Segoe UI", 9)
         )
-        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         self.search_entry.bind("<Return>", lambda event: self.refresh_table())
 
         tk.Button(
             controls, text="Search", command=self.refresh_table,
-            bg=PRIMARY, fg="white", relief="flat", padx=10, pady=5
-        ).pack(side="left", padx=3)
+            bg=PRIMARY, fg="white", relief="flat", padx=9, pady=4
+        ).pack(side="left", padx=2)
 
         tk.Button(
             controls, text="Reset", command=self.reset_filters,
-            bg="#E5E7EB", fg=TEXT, relief="flat", padx=10, pady=5
-        ).pack(side="left", padx=3)
+            bg="#E5E7EB", fg=TEXT, relief="flat", padx=9, pady=4
+        ).pack(side="left", padx=2)
 
         filters = tk.Frame(section, bg=CARD)
-        filters.pack(fill="x", pady=(0, 10))
+        filters.pack(fill="x", pady=(0, 8))
 
         tk.Label(
             filters, text="Status:", bg=CARD, fg=MUTED,
-            font=("Segoe UI", 9, "bold")
+            font=("Segoe UI", 8, "bold")
         ).pack(side="left", padx=(0, 5))
 
         self.status_filter_box = ttk.Combobox(
             filters, textvariable=self.status_filter,
             values=["All Statuses", "Applied", "Interview", "Selected", "Rejected"],
-            state="readonly", width=16
+            state="readonly", width=14
         )
-        self.status_filter_box.pack(side="left", padx=(0, 12))
+        self.status_filter_box.pack(side="left", padx=(0, 10))
         self.status_filter_box.bind(
             "<<ComboboxSelected>>", lambda event: self.refresh_table()
         )
 
         tk.Label(
             filters, text="Sort:", bg=CARD, fg=MUTED,
-            font=("Segoe UI", 9, "bold")
+            font=("Segoe UI", 8, "bold")
         ).pack(side="left", padx=(0, 5))
 
         self.sort_box = ttk.Combobox(
-            filters,
-            values=["Newest First", "Oldest First"],
-            state="readonly", width=15
+            filters, values=["Newest First", "Oldest First"],
+            state="readonly", width=13
         )
         self.sort_box.set("Newest First")
         self.sort_box.pack(side="left")
-        self.sort_box.bind(
-            "<<ComboboxSelected>>", self.change_sort
-        )
+        self.sort_box.bind("<<ComboboxSelected>>", self.change_sort)
 
         table_frame = tk.Frame(section, bg=CARD)
         table_frame.pack(fill="both", expand=True)
@@ -308,60 +324,49 @@ class JobTrackPro:
             "id", "company", "role", "location",
             "date_applied", "status", "interview_date"
         )
-
         self.tree = ttk.Treeview(
             table_frame, columns=columns, show="headings",
             selectmode="browse"
         )
 
         headings = {
-            "id": "ID",
-            "company": "Company",
-            "role": "Job Role",
-            "location": "Location",
-            "date_applied": "Applied On",
-            "status": "Status",
-            "interview_date": "Interview Date"
+            "id": "ID", "company": "Company", "role": "Job Role",
+            "location": "Location", "date_applied": "Applied On",
+            "status": "Status", "interview_date": "Interview Date"
         }
-
         widths = {
-            "id": 40, "company": 115, "role": 120,
-            "location": 90, "date_applied": 90,
-            "status": 85, "interview_date": 105
+            "id": 35, "company": 105, "role": 110,
+            "location": 80, "date_applied": 85,
+            "status": 80, "interview_date": 100
         }
 
         for column in columns:
             self.tree.heading(column, text=headings[column])
-            self.tree.column(
-                column, width=widths[column], anchor="center"
-            )
+            self.tree.column(column, width=widths[column], anchor="center")
 
         scrollbar = ttk.Scrollbar(
             table_frame, orient="vertical", command=self.tree.yview
         )
         self.tree.configure(yscrollcommand=scrollbar.set)
-
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
         self.tree.bind("<<TreeviewSelect>>", self.select_application)
-
         self.tree.tag_configure("Selected", foreground="#047857")
         self.tree.tag_configure("Rejected", foreground="#DC2626")
         self.tree.tag_configure("Interview", foreground="#4338CA")
 
         self.result_label = tk.Label(
             section, text="", bg=CARD, fg=MUTED,
-            font=("Segoe UI", 9)
+            font=("Segoe UI", 8)
         )
-        self.result_label.pack(anchor="w", pady=(8, 0))
+        self.result_label.pack(anchor="w", pady=(7, 0))
 
     # ---------------- VALIDATION ----------------
 
     def valid_date(self, value, field_name, optional=False):
         if not value and optional:
             return True
-
         try:
             datetime.strptime(value, "%Y-%m-%d")
             return True
@@ -377,7 +382,6 @@ class JobTrackPro:
             key: entry.get().strip()
             for key, entry in self.entries.items()
         }
-
         data["status"] = self.status_box.get()
         data["notes"] = self.notes_text.get("1.0", "end").strip()
 
@@ -390,21 +394,18 @@ class JobTrackPro:
 
         if not self.valid_date(data["date_applied"], "Application Date"):
             return None
-
         if not self.valid_date(
             data["interview_date"], "Interview Date", optional=True
         ):
             return None
-
         return data
 
-    # ---------------- CRUD ----------------
+    # ---------------- CRUD OPERATIONS ----------------
 
     def add_application(self):
         data = self.get_form_data()
         if not data:
             return
-
         try:
             with sqlite3.connect(DB_NAME) as conn:
                 conn.execute("""
@@ -417,11 +418,9 @@ class JobTrackPro:
                     data["salary"], data["date_applied"], data["status"],
                     data["notes"], data["interview_date"] or None
                 ))
-
             messagebox.showinfo("Success", "Application added successfully!")
             self.clear_form()
             self.refresh_dashboard()
-
         except sqlite3.Error as error:
             messagebox.showerror("Database Error", str(error))
 
@@ -431,11 +430,9 @@ class JobTrackPro:
                 "No Selection", "Select an application from the table first."
             )
             return
-
         data = self.get_form_data()
         if not data:
             return
-
         try:
             with sqlite3.connect(DB_NAME) as conn:
                 conn.execute("""
@@ -449,11 +446,9 @@ class JobTrackPro:
                     data["notes"], data["interview_date"] or None,
                     self.selected_id
                 ))
-
             messagebox.showinfo("Success", "Application updated successfully!")
             self.clear_form()
             self.refresh_dashboard()
-
         except sqlite3.Error as error:
             messagebox.showerror("Database Error", str(error))
 
@@ -463,49 +458,35 @@ class JobTrackPro:
                 "No Selection", "Select an application to delete."
             )
             return
-
-        confirm = messagebox.askyesno(
-            "Confirm Delete",
-            "Are you sure you want to delete this application?"
-        )
-
-        if not confirm:
+        if not messagebox.askyesno(
+            "Confirm Delete", "Are you sure you want to delete this application?"
+        ):
             return
-
         try:
             with sqlite3.connect(DB_NAME) as conn:
                 conn.execute(
-                    "DELETE FROM applications WHERE id=?",
-                    (self.selected_id,)
+                    "DELETE FROM applications WHERE id=?", (self.selected_id,)
                 )
-
             messagebox.showinfo("Deleted", "Application deleted successfully.")
             self.clear_form()
             self.refresh_dashboard()
-
         except sqlite3.Error as error:
             messagebox.showerror("Database Error", str(error))
 
     def clear_form(self):
         self.selected_id = None
-
-        for key, entry in self.entries.items():
+        for entry in self.entries.values():
             entry.delete(0, "end")
-
         self.entries["date_applied"].insert(0, date.today().isoformat())
         self.status_box.set("Applied")
         self.notes_text.delete("1.0", "end")
-
         for item in self.tree.selection():
             self.tree.selection_remove(item)
-
-        self.add_button.config(text="＋ Add Application")
 
     def select_application(self, event=None):
         selection = self.tree.selection()
         if not selection:
             return
-
         values = self.tree.item(selection[0], "values")
         self.selected_id = int(values[0])
 
@@ -524,7 +505,6 @@ class JobTrackPro:
                 "company", "role", "location", "salary",
                 "date_applied", "status", "notes", "interview_date"
             ]
-
             for key, value in zip(keys, row):
                 if key in self.entries:
                     self.entries[key].delete(0, "end")
@@ -533,7 +513,6 @@ class JobTrackPro:
             self.status_box.set(row[5] or "Applied")
             self.notes_text.delete("1.0", "end")
             self.notes_text.insert("1.0", row[6] or "")
-
         except sqlite3.Error as error:
             messagebox.showerror("Database Error", str(error))
 
@@ -557,16 +536,15 @@ class JobTrackPro:
         search_text = self.search_var.get().strip()
         status = self.status_filter.get()
 
+        # Parentheses ensure the status filter applies to all search fields.
         query = """
             SELECT id, company, role, location, date_applied,
                    status, interview_date
             FROM applications
-            WHERE (
-                company LIKE ? OR role LIKE ? OR location LIKE ?
-            )
+            WHERE (company LIKE ? OR role LIKE ? OR location LIKE ?)
         """
-        search_pattern = f"%{search_text}%"
-        params = [search_pattern, search_pattern, search_pattern]
+        pattern = f"%{search_text}%"
+        params = [pattern, pattern, pattern]
 
         if status != "All Statuses":
             query += " AND status=?"
@@ -583,66 +561,63 @@ class JobTrackPro:
                 tag = row[5] if row[5] in (
                     "Selected", "Rejected", "Interview"
                 ) else ""
-
                 self.tree.insert(
-                    "", "end", values=(
+                    "", "end",
+                    values=(
                         row[0], row[1], row[2], row[3],
                         row[4], row[5], row[6] or "—"
-                    ), tags=(tag,)
+                    ),
+                    tags=(tag,)
                 )
-
             self.result_label.config(
                 text=f"Showing {len(rows)} application(s)"
             )
-
         except sqlite3.Error as error:
             messagebox.showerror("Database Error", str(error))
 
     # ---------------- DASHBOARD ----------------
 
+    def get_all_applications(self):
+        with sqlite3.connect(DB_NAME) as conn:
+            return conn.execute("""
+                SELECT id, company, role, location, salary,
+                       date_applied, status, notes, interview_date
+                FROM applications
+                ORDER BY date_applied DESC, id DESC
+            """).fetchall()
+
     def refresh_dashboard(self):
         try:
-            with sqlite3.connect(DB_NAME) as conn:
-                cursor = conn.cursor()
+            rows = self.get_all_applications()
+            total = len(rows)
+            counts = Counter(row[6] for row in rows)
 
-                cursor.execute("SELECT COUNT(*) FROM applications")
-                total = cursor.fetchone()[0]
-
-                cursor.execute("""
-                    SELECT status, COUNT(*)
-                    FROM applications GROUP BY status
-                """)
-                counts = dict(cursor.fetchall())
-
-                cursor.execute("""
-                    SELECT company, role, interview_date
-                    FROM applications
-                    WHERE interview_date IS NOT NULL
-                      AND interview_date >= ?
-                      AND status NOT IN ('Selected', 'Rejected')
-                    ORDER BY interview_date ASC
-                """, (date.today().isoformat(),))
-
-                upcoming = cursor.fetchall()
+            success_rate = (
+                counts.get("Selected", 0) / total * 100
+            ) if total else 0
 
             self.total_label.config(text=str(total))
             self.applied_label.config(text=str(counts.get("Applied", 0)))
             self.interview_label.config(text=str(counts.get("Interview", 0)))
             self.selected_label.config(text=str(counts.get("Selected", 0)))
+            self.success_label.config(text=f"{success_rate:.1f}%")
+
+            today = date.today().isoformat()
+            upcoming = [
+                row for row in rows
+                if row[8] and row[8] >= today
+                and row[6] not in ("Selected", "Rejected")
+            ]
+            upcoming.sort(key=lambda row: row[8])
 
             if upcoming:
-                details = []
-                for company, role, interview_date in upcoming[:3]:
-                    details.append(
-                        f"{company} ({role}) — {interview_date}"
-                    )
-
-                remaining = len(upcoming) - len(details)
+                details = [
+                    f"{row[1]} ({row[2]}) — {row[8]}"
+                    for row in upcoming[:3]
+                ]
                 message = "Upcoming interviews: " + "  |  ".join(details)
-
-                if remaining > 0:
-                    message += f"  |  +{remaining} more"
-
+                if len(upcoming) > 3:
+                    message += f"  |  +{len(upcoming) - 3} more"
                 self.upcoming_label.config(text=message)
             else:
                 self.upcoming_label.config(
@@ -650,9 +625,248 @@ class JobTrackPro:
                 )
 
             self.refresh_table()
-
         except sqlite3.Error as error:
             messagebox.showerror("Database Error", str(error))
+
+    # ---------------- CSV EXPORT ----------------
+
+    def export_csv(self):
+        rows = self.get_all_applications()
+
+        if not rows:
+            messagebox.showinfo(
+                "No Data", "There are no applications to export yet."
+            )
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            title="Export Job Applications",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")],
+            initialfile="jobtrack_applications.csv"
+        )
+        if not file_path:
+            return
+
+        headers = [
+            "ID", "Company", "Job Role", "Location", "Salary / Package",
+            "Application Date", "Status", "Notes", "Interview Date"
+        ]
+
+        try:
+            with open(file_path, "w", newline="", encoding="utf-8-sig") as file:
+                writer = csv.writer(file)
+                writer.writerow(headers)
+                writer.writerows(rows)
+
+            messagebox.showinfo(
+                "Export Successful",
+                f"Exported {len(rows)} application(s) successfully.\n\n{file_path}"
+            )
+        except OSError as error:
+            messagebox.showerror("Export Error", str(error))
+
+    # ---------------- ANALYTICS ----------------
+
+    def open_analytics(self):
+        rows = self.get_all_applications()
+
+        if not rows:
+            messagebox.showinfo(
+                "No Data", "Add some applications to view analytics."
+            )
+            return
+
+        counts = Counter(row[6] for row in rows)
+        total = len(rows)
+        selected = counts.get("Selected", 0)
+        rejected = counts.get("Rejected", 0)
+
+        success_rate = selected / total * 100
+        response_rate = (selected + rejected) / total * 100
+
+        window = tk.Toplevel(self.root)
+        window.title("JobTrack Pro | Analytics")
+        window.geometry("850x650")
+        window.minsize(750, 580)
+        window.configure(bg=BG)
+
+        tk.Label(
+            window, text="Application Analytics",
+            font=("Segoe UI", 22, "bold"), bg=BG, fg=TEXT
+        ).pack(anchor="w", padx=25, pady=(20, 4))
+
+        tk.Label(
+            window, text="A visual overview of your job search progress",
+            font=("Segoe UI", 10), bg=BG, fg=MUTED
+        ).pack(anchor="w", padx=25, pady=(0, 15))
+
+        metrics = tk.Frame(window, bg=BG)
+        metrics.pack(fill="x", padx=20, pady=5)
+
+        self.analytics_metric(metrics, "TOTAL APPLICATIONS", str(total))
+        self.analytics_metric(metrics, "SUCCESS RATE", f"{success_rate:.1f}%")
+        self.analytics_metric(metrics, "RESPONSE RATE", f"{response_rate:.1f}%")
+
+        charts = tk.Frame(window, bg=BG)
+        charts.pack(fill="both", expand=True, padx=20, pady=15)
+
+        status_card = tk.Frame(
+            charts, bg=CARD, padx=15, pady=15,
+            highlightbackground="#E5E7EB", highlightthickness=1
+        )
+        status_card.pack(side="left", fill="both", expand=True, padx=5)
+
+        monthly_card = tk.Frame(
+            charts, bg=CARD, padx=15, pady=15,
+            highlightbackground="#E5E7EB", highlightthickness=1
+        )
+        monthly_card.pack(side="left", fill="both", expand=True, padx=5)
+
+        tk.Label(
+            status_card, text="Applications by Status",
+            font=("Segoe UI", 12, "bold"), bg=CARD, fg=TEXT
+        ).pack(anchor="w", pady=(0, 10))
+
+        self.draw_status_chart(status_card, counts, total)
+
+        tk.Label(
+            monthly_card, text="Applications by Month",
+            font=("Segoe UI", 12, "bold"), bg=CARD, fg=TEXT
+        ).pack(anchor="w", pady=(0, 10))
+
+        self.draw_monthly_chart(monthly_card, rows)
+
+        tk.Label(
+            window,
+            text=(
+                "Success rate = Selected / Total applications.  "
+                "Response rate = (Selected + Rejected) / Total applications."
+            ),
+            font=("Segoe UI", 8), bg=BG, fg=MUTED, wraplength=800
+        ).pack(padx=20, pady=(0, 15))
+
+    def analytics_metric(self, parent, title, value):
+        card = tk.Frame(
+            parent, bg=CARD, padx=15, pady=12,
+            highlightbackground="#E5E7EB", highlightthickness=1
+        )
+        card.pack(side="left", fill="both", expand=True, padx=5)
+
+        tk.Label(
+            card, text=title, font=("Segoe UI", 8, "bold"),
+            bg=CARD, fg=MUTED
+        ).pack(anchor="w")
+        tk.Label(
+            card, text=value, font=("Segoe UI", 21, "bold"),
+            bg=CARD, fg=PRIMARY
+        ).pack(anchor="w", pady=(4, 0))
+
+    def draw_status_chart(self, parent, counts, total):
+        canvas = tk.Canvas(
+            parent, width=350, height=390,
+            bg=CARD, highlightthickness=0
+        )
+        canvas.pack(fill="both", expand=True)
+
+        statuses = [
+            ("Applied", "#6366F1"),
+            ("Interview", "#0EA5E9"),
+            ("Selected", "#10B981"),
+            ("Rejected", "#EF4444")
+        ]
+
+        y = 20
+        for status, colour in statuses:
+            value = counts.get(status, 0)
+            percentage = value / total if total else 0
+
+            canvas.create_text(
+                8, y + 9, text=status, anchor="w",
+                font=("Segoe UI", 9, "bold"), fill=TEXT
+            )
+            canvas.create_rectangle(
+                95, y, 285, y + 19, fill="#E5E7EB", outline=""
+            )
+
+            bar_width = 190 * percentage
+            if bar_width > 0:
+                canvas.create_rectangle(
+                    95, y, 95 + bar_width, y + 19,
+                    fill=colour, outline=""
+                )
+
+            canvas.create_text(
+                295, y + 9,
+                text=f"{value} ({percentage:.0%})",
+                anchor="w", font=("Segoe UI", 8), fill=MUTED
+            )
+            y += 55
+
+        canvas.create_text(
+            8, y + 15,
+            text=f"Total applications: {total}",
+            anchor="w", font=("Segoe UI", 10, "bold"), fill=TEXT
+        )
+
+    def draw_monthly_chart(self, parent, rows):
+        canvas = tk.Canvas(
+            parent, width=350, height=390,
+            bg=CARD, highlightthickness=0
+        )
+        canvas.pack(fill="both", expand=True)
+
+        monthly = Counter()
+        for row in rows:
+            try:
+                month_key = datetime.strptime(
+                    row[5], "%Y-%m-%d"
+                ).strftime("%Y-%m")
+                monthly[month_key] += 1
+            except (ValueError, TypeError):
+                continue
+
+        if not monthly:
+            canvas.create_text(
+                175, 100, text="No valid application dates",
+                fill=MUTED, font=("Segoe UI", 10)
+            )
+            return
+
+        recent_months = sorted(monthly.keys())[-6:]
+        max_value = max(monthly[m] for m in recent_months) or 1
+
+        left, bottom, chart_height = 35, 300, 210
+        canvas.create_line(
+            left, bottom, 325, bottom, fill="#9CA3AF", width=1
+        )
+
+        bar_width = 28
+        available = 280
+        gap = (
+            available - len(recent_months) * bar_width
+        ) / (len(recent_months) + 1)
+
+        for index, month in enumerate(recent_months):
+            value = monthly[month]
+            height = chart_height * value / max_value
+            x1 = left + gap * (index + 1) + bar_width * index
+            x2 = x1 + bar_width
+            y1 = bottom - height
+
+            canvas.create_rectangle(
+                x1, y1, x2, bottom, fill=PRIMARY, outline=""
+            )
+            canvas.create_text(
+                (x1 + x2) / 2, y1 - 12,
+                text=str(value), fill=TEXT,
+                font=("Segoe UI", 9, "bold")
+            )
+            canvas.create_text(
+                (x1 + x2) / 2, bottom + 18,
+                text=datetime.strptime(month, "%Y-%m").strftime("%b %y"),
+                fill=MUTED, font=("Segoe UI", 8)
+            )
 
 
 if __name__ == "__main__":
