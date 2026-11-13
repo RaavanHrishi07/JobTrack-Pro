@@ -2,7 +2,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import sqlite3
 import csv
-from datetime import datetime, date
+import calendar as month_calendar
+from datetime import datetime, date, timedelta
 from collections import Counter
 
 DB_NAME = "jobtrack.db"
@@ -18,8 +19,13 @@ class JobTrackPro:
     def __init__(self, root):
         self.root = root
         self.root.title("JobTrack Pro | Application Manager")
-        self.root.geometry("1250x790")
-        self.root.minsize(1050, 680)
+        # Fit the application inside the usable screen area (including taskbar space).
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        window_w = min(1250, max(900, screen_w - 80))
+        window_h = min(790, max(560, screen_h - 100))
+        self.root.geometry(f"{window_w}x{window_h}")
+        self.root.minsize(900, 560)
         self.root.configure(bg=BG)
 
         self.selected_id = None
@@ -31,6 +37,7 @@ class JobTrackPro:
         self.create_database()
         self.build_ui()
         self.refresh_dashboard()
+        self.root.after(1800, self.check_due_reminders)
 
     # ---------------- DATABASE ----------------
 
@@ -59,7 +66,21 @@ class JobTrackPro:
                 cursor.execute(
                     "ALTER TABLE applications ADD COLUMN interview_date TEXT"
                 )
+            if "follow_up_date" not in columns:
+                cursor.execute(
+                    "ALTER TABLE applications ADD COLUMN follow_up_date TEXT"
+                )
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS reminder_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    application_id INTEGER NOT NULL,
+                    reminder_type TEXT NOT NULL,
+                    reminder_date TEXT NOT NULL,
+                    notified_at TEXT NOT NULL,
+                    UNIQUE(application_id, reminder_type, reminder_date)
+                )
+            """)
             conn.commit()
 
     # ---------------- MAIN UI ----------------
@@ -95,6 +116,7 @@ class JobTrackPro:
         self.nav_button(sidebar, "▦   Dashboard", self.show_dashboard, active=True)
         self.nav_button(sidebar, "▤   Applications", self.focus_applications)
         self.nav_button(sidebar, "▣   Kanban Board", self.open_kanban)
+        self.nav_button(sidebar, "▦   Calendar & Reminders", self.open_calendar)
         self.nav_button(sidebar, "▥   Analytics", self.open_analytics)
         self.nav_button(sidebar, "⇩   Export Data", self.export_csv)
 
@@ -294,16 +316,74 @@ class JobTrackPro:
     # ---------------- APPLICATION FORM ----------------
 
     def create_form(self, parent):
-        form = tk.Frame(
-            parent, bg=CARD, padx=16, pady=15,
-            highlightbackground="#334155" if getattr(self, "dark_mode", False) else "#E5E7EB", highlightthickness=1
+        """Create a vertically scrollable form so every field and action stays reachable."""
+        form_shell = tk.Frame(
+            parent, bg=CARD, width=270,
+            highlightbackground="#334155" if getattr(self, "dark_mode", False) else "#E5E7EB",
+            highlightthickness=1
         )
-        form.pack(side="left", fill="y", padx=(0, 14))
+        form_shell.pack(side="left", fill="y", padx=(0, 14))
+        form_shell.pack_propagate(False)
 
+        title_bar = tk.Frame(form_shell, bg=CARD)
+        title_bar.pack(fill="x", padx=14, pady=(12, 5))
         tk.Label(
-            form, text="Application Details",
+            title_bar, text="Application Details",
             font=("Segoe UI", 14, "bold"), bg=CARD, fg=TEXT
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w")
+
+        # Canvas + scrollbar: the form scrolls independently from the applications table.
+        canvas_host = tk.Frame(form_shell, bg=CARD)
+        canvas_host.pack(fill="both", expand=True, padx=(10, 4), pady=(0, 8))
+
+        self.form_canvas = tk.Canvas(
+            canvas_host, bg=CARD, highlightthickness=0, borderwidth=0
+        )
+        form_scrollbar = ttk.Scrollbar(
+            canvas_host, orient="vertical", command=self.form_canvas.yview
+        )
+        self.form_canvas.configure(yscrollcommand=form_scrollbar.set)
+        form_scrollbar.pack(side="right", fill="y")
+        self.form_canvas.pack(side="left", fill="both", expand=True)
+
+        form = tk.Frame(self.form_canvas, bg=CARD, padx=5, pady=4)
+        self.form_canvas_window = self.form_canvas.create_window(
+            (0, 0), window=form, anchor="nw"
+        )
+
+        def update_scroll_region(_event=None):
+            self.form_canvas.configure(
+                scrollregion=self.form_canvas.bbox("all")
+            )
+
+        def fit_form_width(event):
+            self.form_canvas.itemconfigure(
+                self.form_canvas_window, width=event.width
+            )
+
+        form.bind("<Configure>", update_scroll_region)
+        self.form_canvas.bind("<Configure>", fit_form_width)
+
+        # Mouse-wheel scrolling works while the pointer is over the form.
+        def on_form_mousewheel(event):
+            if getattr(event, "delta", 0):
+                self.form_canvas.yview_scroll(
+                    int(-1 * (event.delta / 120)), "units"
+                )
+            elif getattr(event, "num", None) == 4:
+                self.form_canvas.yview_scroll(-1, "units")
+            elif getattr(event, "num", None) == 5:
+                self.form_canvas.yview_scroll(1, "units")
+
+        self.form_canvas.bind("<MouseWheel>", on_form_mousewheel)
+        self.form_canvas.bind("<Button-4>", on_form_mousewheel)
+        self.form_canvas.bind("<Button-5>", on_form_mousewheel)
+        form.bind("<Enter>", lambda _e: self.form_canvas.bind_all(
+            "<MouseWheel>", on_form_mousewheel
+        ))
+        form.bind("<Leave>", lambda _e: self.form_canvas.unbind_all(
+            "<MouseWheel>"
+        ))
 
         self.entries = {}
         fields = [
@@ -312,16 +392,17 @@ class JobTrackPro:
             ("Location", "location"),
             ("Salary / Package", "salary"),
             ("Application Date (YYYY-MM-DD)", "date_applied"),
-            ("Interview Date (YYYY-MM-DD)", "interview_date")
+            ("Interview Date (YYYY-MM-DD)", "interview_date"),
+            ("Follow-up Date (YYYY-MM-DD)", "follow_up_date")
         ]
 
         for label_text, key in fields:
             tk.Label(
                 form, text=label_text, font=("Segoe UI", 8, "bold"),
                 bg=CARD, fg=MUTED
-            ).pack(anchor="w", pady=(4, 2))
+            ).pack(anchor="w", pady=(5, 2))
 
-            entry = ttk.Entry(form, width=31, font=("Segoe UI", 9))
+            entry = ttk.Entry(form, font=("Segoe UI", 9))
             entry.pack(fill="x", pady=(0, 3))
             self.entries[key] = entry
 
@@ -330,12 +411,12 @@ class JobTrackPro:
         tk.Label(
             form, text="Application Status",
             font=("Segoe UI", 8, "bold"), bg=CARD, fg=MUTED
-        ).pack(anchor="w", pady=(4, 2))
+        ).pack(anchor="w", pady=(5, 2))
 
         self.status_box = ttk.Combobox(
             form,
             values=["Applied", "Interview", "Selected", "Rejected"],
-            state="readonly", width=28
+            state="readonly"
         )
         self.status_box.set("Applied")
         self.status_box.pack(fill="x", pady=(0, 5))
@@ -343,10 +424,10 @@ class JobTrackPro:
         tk.Label(
             form, text="Notes", font=("Segoe UI", 8, "bold"),
             bg=CARD, fg=MUTED
-        ).pack(anchor="w", pady=(4, 2))
+        ).pack(anchor="w", pady=(5, 2))
 
         self.notes_text = tk.Text(
-            form, width=31, height=3, font=("Segoe UI", 9),
+            form, height=3, font=("Segoe UI", 9),
             relief="solid", bd=1, wrap="word"
         )
         self.notes_text.pack(fill="x", pady=(0, 8))
@@ -356,33 +437,36 @@ class JobTrackPro:
             command=self.add_application,
             bg=PRIMARY, fg="white", activebackground="#4338CA",
             activeforeground="white", font=("Segoe UI", 9, "bold"),
-            relief="flat", cursor="hand2", pady=7
+            relief="flat", cursor="hand2", pady=8
         )
-        self.add_button.pack(fill="x", pady=2)
+        self.add_button.pack(fill="x", pady=3)
 
         tk.Button(
             form, text="Update Selected",
             command=self.update_application,
             bg="#0F766E", fg="white", activebackground="#115E59",
             activeforeground="white", font=("Segoe UI", 9, "bold"),
-            relief="flat", cursor="hand2", pady=7
-        ).pack(fill="x", pady=2)
+            relief="flat", cursor="hand2", pady=8
+        ).pack(fill="x", pady=3)
 
         tk.Button(
             form, text="Delete Selected",
             command=self.delete_application,
             bg="#DC2626", fg="white", activebackground="#B91C1C",
             activeforeground="white", font=("Segoe UI", 9, "bold"),
-            relief="flat", cursor="hand2", pady=7
-        ).pack(fill="x", pady=2)
+            relief="flat", cursor="hand2", pady=8
+        ).pack(fill="x", pady=3)
 
         tk.Button(
             form, text="Clear Form",
             command=self.clear_form,
             bg="#E5E7EB", fg=TEXT, activebackground="#D1D5DB",
             font=("Segoe UI", 9, "bold"), relief="flat",
-            cursor="hand2", pady=7
-        ).pack(fill="x", pady=2)
+            cursor="hand2", pady=8
+        ).pack(fill="x", pady=3)
+
+        # Keep the scroll position at the top whenever the form is cleared.
+        self.form_canvas.yview_moveto(0)
 
     # ---------------- APPLICATION TABLE ----------------
 
@@ -829,6 +913,10 @@ class JobTrackPro:
             data["interview_date"], "Interview Date", optional=True
         ):
             return None
+        if not self.valid_date(
+            data["follow_up_date"], "Follow-up Date", optional=True
+        ):
+            return None
         return data
 
     # ---------------- CRUD OPERATIONS ----------------
@@ -842,12 +930,13 @@ class JobTrackPro:
                 conn.execute("""
                     INSERT INTO applications
                     (company, role, location, salary, date_applied,
-                     status, notes, interview_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     status, notes, interview_date, follow_up_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     data["company"], data["role"], data["location"],
                     data["salary"], data["date_applied"], data["status"],
-                    data["notes"], data["interview_date"] or None
+                    data["notes"], data["interview_date"] or None,
+                    data["follow_up_date"] or None
                 ))
             messagebox.showinfo("Success", "Application added successfully!")
             self.clear_form()
@@ -869,13 +958,14 @@ class JobTrackPro:
                 conn.execute("""
                     UPDATE applications
                     SET company=?, role=?, location=?, salary=?,
-                        date_applied=?, status=?, notes=?, interview_date=?
+                        date_applied=?, status=?, notes=?, interview_date=?,
+                        follow_up_date=?
                     WHERE id=?
                 """, (
                     data["company"], data["role"], data["location"],
                     data["salary"], data["date_applied"], data["status"],
                     data["notes"], data["interview_date"] or None,
-                    self.selected_id
+                    data["follow_up_date"] or None, self.selected_id
                 ))
             messagebox.showinfo("Success", "Application updated successfully!")
             self.clear_form()
@@ -925,7 +1015,7 @@ class JobTrackPro:
             with sqlite3.connect(DB_NAME) as conn:
                 row = conn.execute("""
                     SELECT company, role, location, salary, date_applied,
-                           status, notes, interview_date
+                           status, notes, interview_date, follow_up_date
                     FROM applications WHERE id=?
                 """, (self.selected_id,)).fetchone()
 
@@ -934,7 +1024,8 @@ class JobTrackPro:
 
             keys = [
                 "company", "role", "location", "salary",
-                "date_applied", "status", "notes", "interview_date"
+                "date_applied", "status", "notes", "interview_date",
+                "follow_up_date"
             ]
             for key, value in zip(keys, row):
                 if key in self.entries:
@@ -1059,10 +1150,380 @@ class JobTrackPro:
         except sqlite3.Error as error:
             messagebox.showerror("Database Error", str(error))
 
+    # ---------------- CALENDAR & SMART REMINDERS ----------------
+
+    def open_calendar(self):
+        """Open a month calendar showing interviews and follow-up dates."""
+        existing = getattr(self, "calendar_window", None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.lift()
+                    self.refresh_calendar()
+                    return
+            except tk.TclError:
+                pass
+
+        self.calendar_year = date.today().year
+        self.calendar_month = date.today().month
+        self.calendar_selected_date = date.today()
+
+        self.calendar_window = tk.Toplevel(self.root)
+        self.calendar_window.title("JobTrack Pro | Calendar & Reminders")
+        self.calendar_window.geometry("1050x700")
+        self.calendar_window.minsize(900, 600)
+        self.calendar_window.configure(bg=BG)
+        self.calendar_window.protocol(
+            "WM_DELETE_WINDOW", self.close_calendar
+        )
+
+        header = tk.Frame(self.calendar_window, bg=BG)
+        header.pack(fill="x", padx=22, pady=(18, 10))
+        tk.Label(
+            header, text="Calendar & Reminders",
+            font=("Segoe UI", 21, "bold"), bg=BG, fg=TEXT
+        ).pack(side="left")
+        tk.Label(
+            header,
+            text="Plan interviews and follow up at the right time.",
+            font=("Segoe UI", 9), bg=BG, fg=MUTED
+        ).pack(side="left", padx=15, pady=(8, 0))
+
+        content = tk.Frame(self.calendar_window, bg=BG)
+        content.pack(fill="both", expand=True, padx=20, pady=(0, 18))
+
+        self.calendar_left = tk.Frame(
+            content, bg=CARD, padx=15, pady=15,
+            highlightbackground="#334155" if self.dark_mode else "#E5E7EB",
+            highlightthickness=1
+        )
+        self.calendar_left.pack(side="left", fill="both", expand=True, padx=(0, 10))
+
+        self.calendar_right = tk.Frame(
+            content, bg=CARD, width=310, padx=15, pady=15,
+            highlightbackground="#334155" if self.dark_mode else "#E5E7EB",
+            highlightthickness=1
+        )
+        self.calendar_right.pack(side="right", fill="y")
+        self.calendar_right.pack_propagate(False)
+
+        month_nav = tk.Frame(self.calendar_left, bg=CARD)
+        month_nav.pack(fill="x", pady=(0, 12))
+        tk.Button(
+            month_nav, text="‹", command=self.previous_calendar_month,
+            bg=BG, fg=TEXT, relief="flat", font=("Segoe UI", 15, "bold"),
+            width=3, cursor="hand2"
+        ).pack(side="left")
+        self.calendar_month_label = tk.Label(
+            month_nav, text="", bg=CARD, fg=TEXT,
+            font=("Segoe UI", 14, "bold")
+        )
+        self.calendar_month_label.pack(side="left", expand=True)
+        tk.Button(
+            month_nav, text="Today", command=self.go_calendar_today,
+            bg=PRIMARY, fg="white", relief="flat",
+            font=("Segoe UI", 9, "bold"), padx=12, pady=6,
+            cursor="hand2"
+        ).pack(side="right", padx=(5, 0))
+        tk.Button(
+            month_nav, text="›", command=self.next_calendar_month,
+            bg=BG, fg=TEXT, relief="flat", font=("Segoe UI", 15, "bold"),
+            width=3, cursor="hand2"
+        ).pack(side="right")
+
+        self.calendar_grid = tk.Frame(self.calendar_left, bg=CARD)
+        self.calendar_grid.pack(fill="both", expand=True)
+
+        tk.Label(
+            self.calendar_right, text="Selected date",
+            font=("Segoe UI", 9, "bold"), bg=CARD, fg=MUTED
+        ).pack(anchor="w")
+        self.calendar_selected_label = tk.Label(
+            self.calendar_right, text="", font=("Segoe UI", 15, "bold"),
+            bg=CARD, fg=TEXT
+        )
+        self.calendar_selected_label.pack(anchor="w", pady=(3, 14))
+        tk.Label(
+            self.calendar_right, text="Scheduled items",
+            font=("Segoe UI", 11, "bold"), bg=CARD, fg=TEXT
+        ).pack(anchor="w", pady=(0, 8))
+        self.calendar_events_frame = tk.Frame(self.calendar_right, bg=CARD)
+        self.calendar_events_frame.pack(fill="both", expand=True)
+
+        tk.Label(
+            self.calendar_right,
+            text="● Interview     ● Follow-up",
+            font=("Segoe UI", 8), bg=CARD, fg=MUTED
+        ).pack(anchor="w", pady=(8, 0))
+
+        self.refresh_calendar()
+
+    def close_calendar(self):
+        if getattr(self, "calendar_window", None) is not None:
+            try:
+                self.calendar_window.destroy()
+            except tk.TclError:
+                pass
+        self.calendar_window = None
+
+    def previous_calendar_month(self):
+        if self.calendar_month == 1:
+            self.calendar_month = 12
+            self.calendar_year -= 1
+        else:
+            self.calendar_month -= 1
+        self.refresh_calendar()
+
+    def next_calendar_month(self):
+        if self.calendar_month == 12:
+            self.calendar_month = 1
+            self.calendar_year += 1
+        else:
+            self.calendar_month += 1
+        self.refresh_calendar()
+
+    def go_calendar_today(self):
+        today = date.today()
+        self.calendar_year, self.calendar_month = today.year, today.month
+        self.calendar_selected_date = today
+        self.refresh_calendar()
+
+    def get_calendar_events(self, year=None, month=None):
+        """Return dated interview and follow-up events from SQLite."""
+        with sqlite3.connect(DB_NAME) as conn:
+            rows = conn.execute("""
+                SELECT id, company, role, status, interview_date, follow_up_date
+                FROM applications
+                WHERE interview_date IS NOT NULL OR follow_up_date IS NOT NULL
+            """).fetchall()
+
+        events = {}
+        for app_id, company, role, status, interview_date, follow_up_date in rows:
+            for event_type, event_date in (
+                ("Interview", interview_date), ("Follow-up", follow_up_date)
+            ):
+                if not event_date:
+                    continue
+                try:
+                    parsed = datetime.strptime(event_date, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                if year is not None and (parsed.year != year or parsed.month != month):
+                    continue
+                events.setdefault(parsed, []).append({
+                    "id": app_id, "company": company, "role": role,
+                    "status": status, "type": event_type
+                })
+        return events
+
+    def refresh_calendar(self):
+        if getattr(self, "calendar_window", None) is None:
+            return
+        try:
+            if not self.calendar_window.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
+        for child in self.calendar_grid.winfo_children():
+            child.destroy()
+
+        month_name = date(self.calendar_year, self.calendar_month, 1).strftime("%B %Y")
+        self.calendar_month_label.config(text=month_name)
+        events = self.get_calendar_events(self.calendar_year, self.calendar_month)
+        weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+        for col, weekday in enumerate(weekdays):
+            tk.Label(
+                self.calendar_grid, text=weekday, bg=CARD, fg=MUTED,
+                font=("Segoe UI", 9, "bold"), pady=8
+            ).grid(row=0, column=col, sticky="nsew", padx=2)
+            self.calendar_grid.grid_columnconfigure(col, weight=1, uniform="day")
+
+        weeks = month_calendar.monthcalendar(self.calendar_year, self.calendar_month)
+        today = date.today()
+        for row_index, week in enumerate(weeks, start=1):
+            self.calendar_grid.grid_rowconfigure(row_index, weight=1, uniform="week")
+            for col, day_number in enumerate(week):
+                if day_number == 0:
+                    tk.Frame(self.calendar_grid, bg=BG).grid(
+                        row=row_index, column=col, sticky="nsew", padx=2, pady=2
+                    )
+                    continue
+
+                day_date = date(self.calendar_year, self.calendar_month, day_number)
+                day_events = events.get(day_date, [])
+                is_selected = day_date == self.calendar_selected_date
+                if is_selected:
+                    cell_bg, day_fg = ("#312E81", "white")
+                elif day_date == today:
+                    cell_bg, day_fg = ("#E0E7FF", "#3730A3")
+                else:
+                    cell_bg, day_fg = (BG, TEXT)
+
+                label = f"{day_number}"
+                if day_events:
+                    interview_count = sum(e["type"] == "Interview" for e in day_events)
+                    follow_count = sum(e["type"] == "Follow-up" for e in day_events)
+                    dots = ("●" if interview_count else "") + ("  ◆" if follow_count else "")
+                    label += f"\n{dots}"
+
+                button = tk.Button(
+                    self.calendar_grid, text=label,
+                    command=lambda selected=day_date: self.select_calendar_date(selected),
+                    bg=cell_bg, fg=day_fg,
+                    activebackground="#C7D2FE", activeforeground=TEXT,
+                    relief="flat", bd=0, cursor="hand2",
+                    font=("Segoe UI", 10, "bold"), justify="center"
+                )
+                button.grid(
+                    row=row_index, column=col, sticky="nsew", padx=2, pady=2,
+                    ipadx=2, ipady=8
+                )
+
+        self.show_calendar_events(self.calendar_selected_date)
+
+    def select_calendar_date(self, selected_date):
+        self.calendar_selected_date = selected_date
+        self.refresh_calendar()
+
+    def show_calendar_events(self, selected_date):
+        self.calendar_selected_label.config(
+            text=selected_date.strftime("%A, %d %B %Y")
+        )
+        for child in self.calendar_events_frame.winfo_children():
+            child.destroy()
+
+        events = self.get_calendar_events().get(selected_date, [])
+        if not events:
+            tk.Label(
+                self.calendar_events_frame, text="No events scheduled for this date.",
+                bg=CARD, fg=MUTED, font=("Segoe UI", 9),
+                wraplength=260, justify="left"
+            ).pack(anchor="w", pady=8)
+            return
+
+        for event in events:
+            colour = "#2563EB" if event["type"] == "Interview" else "#0F766E"
+            card = tk.Frame(
+                self.calendar_events_frame, bg=BG, padx=9, pady=8,
+                highlightbackground="#CBD5E1", highlightthickness=1
+            )
+            card.pack(fill="x", pady=5)
+            tk.Label(
+                card, text=event["type"], bg=BG, fg=colour,
+                font=("Segoe UI", 8, "bold")
+            ).pack(anchor="w")
+            tk.Label(
+                card, text=event["company"], bg=BG, fg=TEXT,
+                font=("Segoe UI", 10, "bold"), wraplength=240,
+                justify="left"
+            ).pack(anchor="w", pady=(2, 0))
+            tk.Label(
+                card, text=f'{event["role"]} • {event["status"]}',
+                bg=BG, fg=MUTED, font=("Segoe UI", 8),
+                wraplength=240, justify="left"
+            ).pack(anchor="w")
+            tk.Button(
+                card, text="Open application",
+                command=lambda app_id=event["id"]: self.open_application_from_calendar(app_id),
+                bg=PRIMARY, fg="white", relief="flat",
+                font=("Segoe UI", 8, "bold"), padx=8, pady=4,
+                cursor="hand2"
+            ).pack(anchor="w", pady=(6, 0))
+
+    def open_application_from_calendar(self, app_id):
+        """Load a calendar item into the main application form."""
+        try:
+            with sqlite3.connect(DB_NAME) as conn:
+                row = conn.execute("""
+                    SELECT company, role, location, salary, date_applied,
+                           status, notes, interview_date, follow_up_date
+                    FROM applications WHERE id=?
+                """, (app_id,)).fetchone()
+            if not row:
+                messagebox.showwarning("Not Found", "This application no longer exists.")
+                return
+
+            fields = [
+                "company", "role", "location", "salary", "date_applied",
+                "status", "notes", "interview_date", "follow_up_date"
+            ]
+            for key, value in zip(fields, row):
+                if key in self.entries:
+                    self.entries[key].delete(0, "end")
+                    self.entries[key].insert(0, value or "")
+            self.status_box.set(row[5] or "Applied")
+            self.notes_text.delete("1.0", "end")
+            self.notes_text.insert("1.0", row[6] or "")
+            self.selected_id = app_id
+            self.calendar_window.lift()
+        except sqlite3.Error as error:
+            messagebox.showerror("Calendar Error", str(error))
+
+    def check_due_reminders(self):
+        """Show each due interview/follow-up reminder once per event date."""
+        try:
+            today = date.today().isoformat()
+            due_items = []
+            with sqlite3.connect(DB_NAME) as conn:
+                records = conn.execute("""
+                    SELECT id, company, role, status, interview_date, follow_up_date
+                    FROM applications
+                    WHERE (interview_date = ? OR follow_up_date <= ?)
+                      AND status NOT IN ('Selected', 'Rejected')
+                """, (today, today)).fetchall()
+
+                for app_id, company, role, status, interview_date, follow_up_date in records:
+                    candidates = []
+                    if interview_date == today:
+                        candidates.append(("Interview", interview_date))
+                    if follow_up_date and follow_up_date <= today:
+                        candidates.append(("Follow-up", follow_up_date))
+
+                    for reminder_type, reminder_date in candidates:
+                        cursor = conn.execute("""
+                            INSERT OR IGNORE INTO reminder_log
+                            (application_id, reminder_type, reminder_date, notified_at)
+                            VALUES (?, ?, ?, ?)
+                        """, (
+                            app_id, reminder_type, reminder_date,
+                            datetime.now().isoformat(timespec="seconds")
+                        ))
+                        if cursor.rowcount == 1:
+                            due_items.append((company, role, reminder_type, reminder_date))
+                conn.commit()
+
+            if due_items:
+                lines = [
+                    f"• {kind}: {company} — {role} ({event_date})"
+                    for company, role, kind, event_date in due_items[:10]
+                ]
+                if len(due_items) > 10:
+                    lines.append(f"...and {len(due_items) - 10} more")
+                messagebox.showinfo(
+                    "JobTrack Pro Reminders",
+                    "You have reminders due:\n\n" + "\n".join(lines)
+                )
+        except sqlite3.Error as error:
+            # Reminder failures should not stop the main application.
+            print(f"Reminder check error: {error}")
+        finally:
+            try:
+                if self.root.winfo_exists():
+                    self.root.after(60000, self.check_due_reminders)
+            except tk.TclError:
+                pass
+
     # ---------------- CSV EXPORT ----------------
 
     def export_csv(self):
-        rows = self.get_all_applications()
+        with sqlite3.connect(DB_NAME) as conn:
+            rows = conn.execute("""
+                SELECT id, company, role, location, salary, date_applied,
+                       status, notes, interview_date, follow_up_date
+                FROM applications ORDER BY date_applied DESC, id DESC
+            """).fetchall()
 
         if not rows:
             messagebox.showinfo(
@@ -1081,7 +1542,8 @@ class JobTrackPro:
 
         headers = [
             "ID", "Company", "Job Role", "Location", "Salary / Package",
-            "Application Date", "Status", "Notes", "Interview Date"
+            "Application Date", "Status", "Notes", "Interview Date",
+            "Follow-up Date"
         ]
 
         try:
