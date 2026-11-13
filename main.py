@@ -94,6 +94,7 @@ class JobTrackPro:
 
         self.nav_button(sidebar, "▦   Dashboard", self.show_dashboard, active=True)
         self.nav_button(sidebar, "▤   Applications", self.focus_applications)
+        self.nav_button(sidebar, "▣   Kanban Board", self.open_kanban)
         self.nav_button(sidebar, "▥   Analytics", self.open_analytics)
         self.nav_button(sidebar, "⇩   Export Data", self.export_csv)
 
@@ -491,6 +492,306 @@ class JobTrackPro:
             font=("Segoe UI", 8)
         )
         self.result_label.pack(anchor="w", pady=(7, 0))
+
+    # ---------------- KANBAN BOARD ----------------
+
+    def open_kanban(self):
+        """Open a drag-and-drop board for changing application statuses."""
+        if getattr(self, "kanban_window", None) is not None:
+            try:
+                if self.kanban_window.winfo_exists():
+                    self.kanban_window.lift()
+                    self.refresh_kanban_board()
+                    return
+            except tk.TclError:
+                pass
+
+        self.kanban_window = tk.Toplevel(self.root)
+        self.kanban_window.title("JobTrack Pro | Kanban Board")
+        self.kanban_window.geometry("1120x680")
+        self.kanban_window.minsize(900, 560)
+        self.kanban_window.configure(bg=BG)
+        self.kanban_window.protocol("WM_DELETE_WINDOW", self.close_kanban)
+
+        header = tk.Frame(self.kanban_window, bg=BG)
+        header.pack(fill="x", padx=22, pady=(18, 5))
+
+        tk.Label(
+            header, text="Application Pipeline",
+            font=("Segoe UI", 21, "bold"), bg=BG, fg=TEXT
+        ).pack(anchor="w")
+        tk.Label(
+            header,
+            text="Drag an application card into another column to update its status.",
+            font=("Segoe UI", 9), bg=BG, fg=MUTED
+        ).pack(anchor="w", pady=(3, 0))
+
+        self.kanban_feedback = tk.Label(
+            self.kanban_window,
+            text="Tip: Drop each card inside the target status column.",
+            font=("Segoe UI", 9, "bold"), bg=BG, fg=PRIMARY,
+            anchor="w"
+        )
+        self.kanban_feedback.pack(fill="x", padx=23, pady=(5, 8))
+
+        self.kanban_board = tk.Frame(self.kanban_window, bg=BG)
+        self.kanban_board.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+
+        self.kanban_columns = {}
+        self.kanban_counts = {}
+        self.dragged_application_id = None
+        self.drag_ghost = None
+        self.refresh_kanban_board()
+
+    def close_kanban(self):
+        if getattr(self, "drag_ghost", None) is not None:
+            try:
+                self.drag_ghost.destroy()
+            except tk.TclError:
+                pass
+            self.drag_ghost = None
+        if getattr(self, "kanban_window", None) is not None:
+            try:
+                self.kanban_window.destroy()
+            except tk.TclError:
+                pass
+        self.kanban_window = None
+        self.kanban_columns = {}
+
+    def refresh_kanban_board(self):
+        """Rebuild board columns from the current SQLite records."""
+        if getattr(self, "kanban_window", None) is None:
+            return
+        try:
+            if not self.kanban_window.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
+        for widget in self.kanban_board.winfo_children():
+            widget.destroy()
+
+        statuses = [
+            ("Applied", "#6366F1"),
+            ("Interview", "#0EA5E9"),
+            ("Selected", "#10B981"),
+            ("Rejected", "#EF4444")
+        ]
+        rows = self.get_all_applications()
+        grouped = {status: [] for status, _ in statuses}
+        for row in rows:
+            status = row[6] if row[6] in grouped else "Applied"
+            grouped[status].append(row)
+
+        self.kanban_columns = {}
+        self.kanban_counts = {}
+
+        for status, accent in statuses:
+            column = tk.Frame(
+                self.kanban_board, bg=CARD,
+                highlightbackground="#334155" if self.dark_mode else "#E5E7EB",
+                highlightthickness=1
+            )
+            column.pack(side="left", fill="both", expand=True, padx=5)
+            self.kanban_columns[status] = column
+
+            heading = tk.Frame(column, bg=CARD)
+            heading.pack(fill="x", padx=10, pady=(10, 7))
+            tk.Frame(heading, bg=accent, height=4).pack(fill="x", pady=(0, 8))
+
+            title_row = tk.Frame(heading, bg=CARD)
+            title_row.pack(fill="x")
+            tk.Label(
+                title_row, text=status, bg=CARD, fg=TEXT,
+                font=("Segoe UI", 10, "bold")
+            ).pack(side="left")
+            count_label = tk.Label(
+                title_row, text=str(len(grouped[status])), bg=BG, fg=MUTED,
+                font=("Segoe UI", 8, "bold"), padx=7, pady=2
+            )
+            count_label.pack(side="right")
+            self.kanban_counts[status] = count_label
+
+            body = tk.Frame(column, bg=BG)
+            body.pack(fill="both", expand=True, padx=7, pady=(0, 8))
+
+            canvas = tk.Canvas(
+                body, bg=BG, highlightthickness=0, borderwidth=0
+            )
+            scrollbar = ttk.Scrollbar(
+                body, orient="vertical", command=canvas.yview
+            )
+            cards_frame = tk.Frame(canvas, bg=BG)
+            cards_frame.bind(
+                "<Configure>",
+                lambda event, c=canvas: c.configure(
+                    scrollregion=c.bbox("all")
+                )
+            )
+            canvas_window = canvas.create_window(
+                (0, 0), window=cards_frame, anchor="nw"
+            )
+            canvas.bind(
+                "<Configure>",
+                lambda event, c=canvas, item=canvas_window:
+                    c.itemconfigure(item, width=event.width)
+            )
+            canvas.configure(yscrollcommand=scrollbar.set)
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+
+            for app in grouped[status]:
+                self.create_kanban_card(cards_frame, app, accent)
+
+            if not grouped[status]:
+                tk.Label(
+                    cards_frame, text="No applications",
+                    bg=BG, fg=MUTED, font=("Segoe UI", 9),
+                    pady=18
+                ).pack(fill="x")
+
+    def create_kanban_card(self, parent, app, accent):
+        """Create a draggable card. app uses the get_all_applications tuple."""
+        app_id, company, role, location, salary, applied, status, notes, interview = app
+        card = tk.Frame(
+            parent, bg=CARD, padx=10, pady=9,
+            highlightbackground="#334155" if self.dark_mode else "#E5E7EB",
+            highlightthickness=1, cursor="fleur"
+        )
+        card.pack(fill="x", padx=3, pady=5)
+        tk.Frame(card, bg=accent, height=3).pack(fill="x", pady=(0, 7))
+
+        tk.Label(
+            card, text=company, bg=CARD, fg=TEXT,
+            font=("Segoe UI", 10, "bold"), anchor="w",
+            wraplength=205, justify="left"
+        ).pack(fill="x")
+        tk.Label(
+            card, text=role, bg=CARD, fg=MUTED,
+            font=("Segoe UI", 9), anchor="w",
+            wraplength=205, justify="left"
+        ).pack(fill="x", pady=(2, 6))
+
+        details = f"Applied: {applied}"
+        if location:
+            details += f"\n{location}"
+        if interview:
+            details += f"\nInterview: {interview}"
+        tk.Label(
+            card, text=details, bg=CARD, fg=MUTED,
+            font=("Segoe UI", 8), anchor="w", justify="left"
+        ).pack(fill="x")
+
+        # Bind drag handlers to the card and its child labels.
+        for widget in (card, *card.winfo_children()):
+            widget.bind(
+                "<ButtonPress-1>",
+                lambda event, record_id=app_id, name=company:
+                    self.kanban_drag_start(event, record_id, name)
+            )
+            widget.bind("<B1-Motion>", self.kanban_drag_motion)
+            widget.bind("<ButtonRelease-1>", self.kanban_drag_drop)
+
+    def kanban_drag_start(self, event, app_id, company):
+        self.dragged_application_id = app_id
+        if self.drag_ghost is not None:
+            try:
+                self.drag_ghost.destroy()
+            except tk.TclError:
+                pass
+
+        ghost = tk.Toplevel(self.kanban_window)
+        ghost.overrideredirect(True)
+        ghost.attributes("-topmost", True)
+        ghost.configure(bg="#312E81")
+        tk.Label(
+            ghost, text=f"Moving: {company}",
+            bg="#312E81", fg="white",
+            font=("Segoe UI", 9, "bold"), padx=12, pady=7
+        ).pack()
+        self.drag_ghost = ghost
+        ghost.geometry(f"+{event.x_root + 12}+{event.y_root + 12}")
+        self.kanban_feedback.config(
+            text=f"Moving {company} — release over a status column.", fg=PRIMARY
+        )
+
+    def kanban_drag_motion(self, event):
+        if self.dragged_application_id is None or self.drag_ghost is None:
+            return
+        try:
+            self.drag_ghost.geometry(
+                f"+{event.x_root + 12}+{event.y_root + 12}"
+            )
+        except tk.TclError:
+            pass
+
+    def kanban_drag_drop(self, event):
+        if self.dragged_application_id is None:
+            return
+
+        target_status = None
+        x, y = event.x_root, event.y_root
+        for status, column in self.kanban_columns.items():
+            try:
+                left = column.winfo_rootx()
+                top = column.winfo_rooty()
+                right = left + column.winfo_width()
+                bottom = top + column.winfo_height()
+                if left <= x <= right and top <= y <= bottom:
+                    target_status = status
+                    break
+            except tk.TclError:
+                continue
+
+        app_id = self.dragged_application_id
+        self.dragged_application_id = None
+
+        if self.drag_ghost is not None:
+            try:
+                self.drag_ghost.destroy()
+            except tk.TclError:
+                pass
+            self.drag_ghost = None
+
+        if target_status is None:
+            self.kanban_feedback.config(
+                text="Card returned unchanged. Drop it inside a status column.",
+                fg=MUTED
+            )
+            return
+
+        try:
+            with sqlite3.connect(DB_NAME) as conn:
+                current = conn.execute(
+                    "SELECT status, company FROM applications WHERE id=?",
+                    (app_id,)
+                ).fetchone()
+                if not current:
+                    self.kanban_feedback.config(
+                        text="This application no longer exists.", fg="#DC2626"
+                    )
+                    self.refresh_kanban_board()
+                    return
+                old_status, company = current
+                if old_status == target_status:
+                    self.kanban_feedback.config(
+                        text=f"{company} is already in {target_status}.", fg=MUTED
+                    )
+                    return
+                conn.execute(
+                    "UPDATE applications SET status=? WHERE id=?",
+                    (target_status, app_id)
+                )
+
+            self.kanban_feedback.config(
+                text=f"{company}: {old_status} → {target_status}",
+                fg="#10B981"
+            )
+            self.refresh_dashboard()
+            self.refresh_kanban_board()
+        except sqlite3.Error as error:
+            messagebox.showerror("Kanban Update Error", str(error))
+            self.refresh_kanban_board()
 
     # ---------------- VALIDATION ----------------
 
