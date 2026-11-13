@@ -23,6 +23,7 @@ class JobTrackPro:
         self.root.configure(bg=BG)
 
         self.selected_id = None
+        self.dark_mode = False
         self.sort_order = "Newest First"
         self.status_filter = tk.StringVar(value="All Statuses")
         self.search_var = tk.StringVar()
@@ -64,21 +65,86 @@ class JobTrackPro:
     # ---------------- MAIN UI ----------------
 
     def build_ui(self):
-        header = tk.Frame(self.root, bg=BG)
-        header.pack(fill="x", padx=25, pady=(18, 8))
+        """Build the modern application shell and dashboard."""
+        self.apply_widget_styles()
+
+        shell = tk.Frame(self.root, bg=BG)
+        shell.pack(fill="both", expand=True)
+
+        # Modern left navigation sidebar
+        sidebar = tk.Frame(shell, bg="#111827", width=220)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+
+        brand = tk.Frame(sidebar, bg="#111827")
+        brand.pack(fill="x", padx=20, pady=(25, 30))
 
         tk.Label(
-            header, text="JobTrack Pro",
-            font=("Segoe UI", 25, "bold"), bg=BG, fg=TEXT
-        ).pack(side="left")
+            brand, text="JT", font=("Segoe UI", 17, "bold"),
+            bg=PRIMARY, fg="white", width=3, height=1
+        ).pack(anchor="w", pady=(0, 12))
+        tk.Label(
+            brand, text="JobTrack Pro", font=("Segoe UI", 16, "bold"),
+            bg="#111827", fg="white"
+        ).pack(anchor="w")
+        tk.Label(
+            brand, text="CAREER WORKSPACE", font=("Segoe UI", 8, "bold"),
+            bg="#111827", fg="#9CA3AF"
+        ).pack(anchor="w", pady=(4, 0))
+
+        self.nav_button(sidebar, "▦   Dashboard", self.show_dashboard, active=True)
+        self.nav_button(sidebar, "▤   Applications", self.focus_applications)
+        self.nav_button(sidebar, "▥   Analytics", self.open_analytics)
+        self.nav_button(sidebar, "⇩   Export Data", self.export_csv)
+
+        tk.Frame(sidebar, bg="#374151", height=1).pack(
+            fill="x", padx=18, pady=18
+        )
+
+        tk.Button(
+            sidebar,
+            text="☾   Toggle Theme",
+            command=self.toggle_theme,
+            bg="#1F2937", fg="#E5E7EB",
+            activebackground="#374151", activeforeground="white",
+            font=("Segoe UI", 9, "bold"), relief="flat",
+            bd=0, anchor="w", padx=18, pady=11, cursor="hand2"
+        ).pack(fill="x", padx=12, pady=3)
 
         tk.Label(
-            header, text="Your personal job application dashboard",
-            font=("Segoe UI", 10), bg=BG, fg=MUTED
-        ).pack(side="left", padx=18, pady=(10, 0))
+            sidebar, text="Organise your next move.",
+            bg="#111827", fg="#9CA3AF",
+            font=("Segoe UI", 8), wraplength=175, justify="left"
+        ).pack(side="bottom", anchor="w", padx=20, pady=20)
 
-        self.cards_frame = tk.Frame(self.root, bg=BG)
-        self.cards_frame.pack(fill="x", padx=25, pady=8)
+        # Main workspace
+        self.workspace = tk.Frame(shell, bg=BG)
+        self.workspace.pack(side="left", fill="both", expand=True)
+
+        header = tk.Frame(self.workspace, bg=BG)
+        header.pack(fill="x", padx=25, pady=(20, 10))
+
+        heading_area = tk.Frame(header, bg=BG)
+        heading_area.pack(side="left", fill="x", expand=True)
+
+        tk.Label(
+            heading_area, text="Dashboard",
+            font=("Segoe UI", 23, "bold"), bg=BG, fg=TEXT
+        ).pack(anchor="w")
+        tk.Label(
+            heading_area,
+            text="Track applications, interviews and career progress in one place.",
+            font=("Segoe UI", 9), bg=BG, fg=MUTED
+        ).pack(anchor="w", pady=(3, 0))
+
+        tk.Label(
+            header, text=date.today().strftime("%A, %d %B %Y"),
+            font=("Segoe UI", 9, "bold"), bg=CARD, fg=MUTED,
+            padx=13, pady=9
+        ).pack(side="right", anchor="n")
+
+        self.cards_frame = tk.Frame(self.workspace, bg=BG)
+        self.cards_frame.pack(fill="x", padx=25, pady=(8, 12))
 
         self.total_label = self.create_summary_card(
             self.cards_frame, "TOTAL APPLICATIONS"
@@ -97,54 +163,118 @@ class JobTrackPro:
         )
 
         self.upcoming_frame = tk.Frame(
-            self.root, bg="#EEF2FF",
-            highlightbackground="#C7D2FE", highlightthickness=1
+            self.workspace,
+            bg="#1E3A5F" if getattr(self, "dark_mode", False) else "#EEF2FF",
+            highlightbackground="#334155" if getattr(self, "dark_mode", False) else "#C7D2FE",
+            highlightthickness=1
         )
-        self.upcoming_frame.pack(fill="x", padx=25, pady=(4, 10))
+        self.upcoming_frame.pack(fill="x", padx=25, pady=(0, 12))
 
         self.upcoming_label = tk.Label(
             self.upcoming_frame,
             text="Upcoming interviews: None scheduled",
-            font=("Segoe UI", 10, "bold"), bg="#EEF2FF",
-            fg="#3730A3", anchor="w", padx=15, pady=9
+            font=("Segoe UI", 9, "bold"),
+            bg="#1E3A5F" if getattr(self, "dark_mode", False) else "#EEF2FF",
+            fg="#BFDBFE" if getattr(self, "dark_mode", False) else "#3730A3",
+            anchor="w", padx=15, pady=10
         )
         self.upcoming_label.pack(fill="x")
 
-        main = tk.Frame(self.root, bg=BG)
-        main.pack(fill="both", expand=True, padx=25, pady=5)
+        main = tk.Frame(self.workspace, bg=BG)
+        main.pack(fill="both", expand=True, padx=25, pady=(0, 12))
 
         self.create_form(main)
         self.create_table_section(main)
 
-        footer = tk.Frame(self.root, bg=BG)
-        footer.pack(fill="x", padx=25, pady=(3, 12))
-
-        tk.Button(
-            footer, text="View Analytics",
-            command=self.open_analytics,
-            bg="#0F766E", fg="white", activebackground="#115E59",
-            activeforeground="white", font=("Segoe UI", 10, "bold"),
-            relief="flat", cursor="hand2", padx=15, pady=8
+        footer = tk.Frame(self.workspace, bg=BG)
+        footer.pack(fill="x", padx=25, pady=(0, 13))
+        tk.Label(
+            footer, text="JOBTRACK PRO  •  YOUR CAREER, ORGANISED",
+            bg=BG, fg=MUTED, font=("Segoe UI", 8, "bold")
         ).pack(side="left")
 
-        tk.Button(
-            footer, text="Export CSV",
-            command=self.export_csv,
-            bg=PRIMARY, fg="white", activebackground="#4338CA",
+    def nav_button(self, parent, text, command, active=False):
+        bg = "#312E81" if active else "#111827"
+        fg = "#FFFFFF" if active else "#D1D5DB"
+        button = tk.Button(
+            parent, text=text, command=command,
+            bg=bg, fg=fg, activebackground="#374151",
             activeforeground="white", font=("Segoe UI", 10, "bold"),
-            relief="flat", cursor="hand2", padx=15, pady=8
-        ).pack(side="left", padx=9)
+            relief="flat", bd=0, anchor="w", padx=18, pady=12,
+            cursor="hand2"
+        )
+        button.pack(fill="x", padx=12, pady=3)
+        return button
 
-        tk.Label(
-            footer,
-            text="JobTrack Pro • Keep your career journey organised",
-            bg=BG, fg=MUTED, font=("Segoe UI", 9)
-        ).pack(side="right")
+    def show_dashboard(self):
+        self.refresh_dashboard()
+
+    def focus_applications(self):
+        self.search_entry.focus_set()
+        self.tree.focus_set()
+
+    def apply_widget_styles(self):
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        style.configure(
+            "TEntry", padding=7, fieldbackground=CARD,
+            foreground=TEXT, bordercolor="#D1D5DB"
+        )
+        style.configure(
+            "TCombobox", padding=6, fieldbackground=CARD,
+            foreground=TEXT, background=CARD
+        )
+        style.map(
+            "TCombobox", fieldbackground=[("readonly", CARD)],
+            foreground=[("readonly", TEXT)]
+        )
+        style.configure(
+            "Treeview", background=CARD, foreground=TEXT,
+            fieldbackground=CARD, rowheight=30,
+            borderwidth=0, font=("Segoe UI", 9)
+        )
+        style.configure(
+            "Treeview.Heading", background="#E5E7EB",
+            foreground="#374151", font=("Segoe UI", 9, "bold"),
+            padding=8, relief="flat"
+        )
+        style.map(
+            "Treeview", background=[("selected", "#C7D2FE")],
+            foreground=[("selected", "#1E1B4B")]
+        )
+
+    def toggle_theme(self):
+        """Switch between light and dark palettes, preserving database data."""
+        global BG, CARD, PRIMARY, TEXT, MUTED
+
+        self.dark_mode = not getattr(self, "dark_mode", False)
+        if self.dark_mode:
+            BG = "#0F172A"
+            CARD = "#1E293B"
+            PRIMARY = "#818CF8"
+            TEXT = "#F1F5F9"
+            MUTED = "#94A3B8"
+        else:
+            BG = "#F4F6FA"
+            CARD = "#FFFFFF"
+            PRIMARY = "#4F46E5"
+            TEXT = "#1F2937"
+            MUTED = "#6B7280"
+
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        self.build_ui()
+        self.refresh_dashboard()
 
     def create_summary_card(self, parent, title):
         card = tk.Frame(
-            parent, bg=CARD, padx=13, pady=11,
-            highlightbackground="#E5E7EB", highlightthickness=1
+            parent, bg=CARD, padx=14, pady=13,
+            highlightbackground="#334155" if getattr(self, "dark_mode", False) else "#E5E7EB",
+            highlightthickness=1
         )
         card.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
@@ -165,7 +295,7 @@ class JobTrackPro:
     def create_form(self, parent):
         form = tk.Frame(
             parent, bg=CARD, padx=16, pady=15,
-            highlightbackground="#E5E7EB", highlightthickness=1
+            highlightbackground="#334155" if getattr(self, "dark_mode", False) else "#E5E7EB", highlightthickness=1
         )
         form.pack(side="left", fill="y", padx=(0, 14))
 
@@ -258,7 +388,7 @@ class JobTrackPro:
     def create_table_section(self, parent):
         section = tk.Frame(
             parent, bg=CARD, padx=13, pady=13,
-            highlightbackground="#E5E7EB", highlightthickness=1
+            highlightbackground="#334155" if getattr(self, "dark_mode", False) else "#E5E7EB", highlightthickness=1
         )
         section.pack(side="left", fill="both", expand=True)
 
@@ -713,13 +843,13 @@ class JobTrackPro:
 
         status_card = tk.Frame(
             charts, bg=CARD, padx=15, pady=15,
-            highlightbackground="#E5E7EB", highlightthickness=1
+            highlightbackground="#334155" if getattr(self, "dark_mode", False) else "#E5E7EB", highlightthickness=1
         )
         status_card.pack(side="left", fill="both", expand=True, padx=5)
 
         monthly_card = tk.Frame(
             charts, bg=CARD, padx=15, pady=15,
-            highlightbackground="#E5E7EB", highlightthickness=1
+            highlightbackground="#334155" if getattr(self, "dark_mode", False) else "#E5E7EB", highlightthickness=1
         )
         monthly_card.pack(side="left", fill="both", expand=True, padx=5)
 
@@ -749,7 +879,7 @@ class JobTrackPro:
     def analytics_metric(self, parent, title, value):
         card = tk.Frame(
             parent, bg=CARD, padx=15, pady=12,
-            highlightbackground="#E5E7EB", highlightthickness=1
+            highlightbackground="#334155" if getattr(self, "dark_mode", False) else "#E5E7EB", highlightthickness=1
         )
         card.pack(side="left", fill="both", expand=True, padx=5)
 
